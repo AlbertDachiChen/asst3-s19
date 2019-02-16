@@ -43,7 +43,7 @@ First line of form "N M" where N is number of nodes, and M is number of edges.
 Next N lines of form "n LF" declaring nodes in sequence, giving their ideal load factors
 
 Next M lines of form "e I J" indicating an edge from node I to node J.
-The graphs are all undirected, and so their will be entries for both
+The graphs are all undirected, and so there will be entries for both
 (I, J) and (J, I).
 
 Nodes must be numbered between 0 and N-1.  Edges must be in sorted
