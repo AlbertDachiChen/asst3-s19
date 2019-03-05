@@ -13,7 +13,7 @@ import rutil
 
 def usage(fname):
     
-    ustring = "Usage: %s [-h][-Q] [-k K] [-b BENCHLIST] [-n NSTEP] [-u UPDATE] [-t THREADLIMIT] [-i ID] [-f OUTFILE]" % fname
+    ustring = "Usage: %s [-h][-Q] [-k K] [-b BENCHLIST] [-n NSTEP] [-u UPDATE] [-t THREADLIMIT] [-r RUNS] [-i ID] [-f OUTFILE]" % fname
     print ustring
     print "    -h            Print this message"
     print "    -Q            Quick mode: Don't compare with reference solution"
@@ -26,6 +26,7 @@ def usage(fname):
     print "       b: batch"
     print "    -t THREADLIMIT Specify number of OMP threads"
     print "       If > 1, will run crun-omp.  Else will run crun-seq"
+    print "    -r RUNS       Set number of times each benchmark is run"
     print "    -i ID         Specify unique ID for distinguishing check files"
     print "    -f OUTFILE    Create output file recording measurements"
     print "         If file name contains field of form XX..X, will replace with ID having that many digits"
@@ -44,6 +45,9 @@ saveDirectory = "./check"
 
 testFileName = ""
 referenceFileName = ""
+
+# How many times does each benchmark get run?
+runCount = 3
 
 # Grading parameters
 pointsPerRun = 15
@@ -140,6 +144,54 @@ def checkOutputs(referenceFile, testFile, testName):
     return badLines == 0
 
 
+def doRun(cmdList, simFileName):
+    cmdLine = " ".join(cmdList)
+    simFile = subprocess.PIPE
+    if simFileName is not None:
+        try:
+            simFile = open(simFileName, 'w')
+        except:
+            print "Couldn't open output file '%s'" % fname
+            return None
+    tstart = datetime.datetime.now()
+    try:
+        print "Running '%s'" % cmdLine
+        simProcess = subprocess.Popen(cmdList, stdout = simFile, stderr = subprocess.PIPE)
+        simProcess.wait()
+        if simFile != subprocess.PIPE:
+            simFile.close()
+        returnCode = simProcess.returncode
+        # Echo any results printed by simulator on stderr onto stdout
+        for line in simProcess.stderr:
+            sys.stdout.write(line)
+    except Exception as e:
+        print "Execution of command '%s' failed. %s" % (cmdLine, e)
+        if simFile != subprocess.PIPE:
+            simFile.close()
+        return None
+    if returnCode == 0:
+        delta = datetime.datetime.now() - tstart
+        secs = delta.seconds + 24 * 3600 * delta.days + 1e-6 * delta.microseconds
+        if simFile != subprocess.PIPE:
+            simFile.close()
+        return secs
+    else:
+        print "Execution of command '%s' gave return code %d" % (cmdLine, returnCode)
+        if simFile != subprocess.PIPE:
+            simFile.close()
+        return None
+
+def bestRun(cmdList, simFileName):
+    sofar = 1e6
+    for r in range(runCount):
+        if runCount > 1:
+            print "Run #%d" % (r+1)
+        secs = doRun(cmdList, simFileName)
+        if secs is None:
+            return None
+        sofar = min(sofar, secs)
+    return sofar
+
 def runBenchmark(useRef, name, graphDimension, stepCount, updateType, threadCount, otherArgs):
     global referenceFileName, testFileName
     nodes = graphDimension * graphDimension
@@ -152,7 +204,7 @@ def runBenchmark(useRef, name, graphDimension, stepCount, updateType, threadCoun
     results = params + [str(threadCount)]
     prog = refSimProgram if useRef else simProgram if threadCount == 1 else ompSimProgram
     clist = ["-g", gfname, "-r", rfname, "-u", updateType, "-n", str(stepCount), "-t", str(threadCount)] + otherArgs
-    simFile = subprocess.PIPE
+    simFileName = None
     if not useRef:
         params = (graphDimension, gtype, rtype, load, stepCount, updateType, rutil.DEFAULTSEED)
         name = testName(params)
@@ -165,37 +217,16 @@ def runBenchmark(useRef, name, graphDimension, stepCount, updateType, threadCoun
                 outMsg("Couldn't create directory '%s' (%s)" % (saveDirectory, str(e)))
                 simFile = subprocess.PIPE
         clist += ["-i", str(stepCount)]
-        fname = saveFileName(useRef, graphDimension, gtype, rtype, load, stepCount, updateType)
-        try:
-            simFile = open(fname, "w")
-            if useRef:
-                referenceFileName = fname
-            else:
-                testFileName = fname
-        except:
-            print "Couldn't open output file '%s'" % fname
-            simFile = subprocess.PIPE
+        simFileName = saveFileName(useRef, graphDimension, gtype, rtype, load, stepCount, updateType)
+        if useRef:
+            referenceFileName = simFileName
+        else:
+            testFileName = simFileName
     else:
         clist += ["-q"]
     cmd = [prog] + clist
-    cmdLine = " ".join(cmd)
-    tstart = datetime.datetime.now()
-    try:
-        print "Running '%s'" % cmdLine
-        simProcess = subprocess.Popen(cmd, stdout = simFile, stderr = subprocess.PIPE)
-        simProcess.wait()
-        if simFile != subprocess.PIPE:
-            simFile.close()
-        returnCode = simProcess.returncode
-        # Echo any results printed by simulator on stderr onto stdout
-        for line in simProcess.stderr:
-            sys.stdout.write(line)
-    except Exception as e:
-        print "Execution of command '%s' failed. %s" % (cmdLine, e)
-        return None
-    if returnCode == 0:
-        delta = datetime.datetime.now() - tstart
-        secs = delta.seconds + 24 * 3600 * delta.days + 1e-6 * delta.microseconds
+    secs = bestRun(cmd, simFileName)
+    if secs is not None:
         rmoves = (nodes * load) * stepCount
         npm = 1e9 * secs/rmoves
         results.append("%.2f" % secs)
@@ -297,12 +328,13 @@ def generateFileName(template):
 def run(name, args):
     global outFile, doCheck
     global uniqueId
+    global runCount
     graphDimension = defaultDimension
     nstep = defaultSteps
     testList = list(defaultTests)
     updateType = defaultMode
     threadCount = defaultThreadCount
-    optString = "hQk:b:n:u:t:i:f:"
+    optString = "hQk:b:n:u:t:r:i:f:"
     optlist, args = getopt.getopt(args, optString)
     otherArgs = []
     for (opt, val) in optlist:
@@ -332,6 +364,8 @@ def run(name, args):
            updateType = val
         elif opt == '-t':
             threadCount = int(val)
+        elif opt == '-r':
+            runCount = int(val)
         else:
             outmsg("Unknown option '%s'" % opt)
             usage(name)
