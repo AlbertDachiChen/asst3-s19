@@ -1,5 +1,5 @@
 #include "crun.h"
-
+#include "cycletimer.h"
 
 /* Compute ideal load factor (ILF) for node */
 static inline double neighbor_ilf(state_t *s, int nid) {
@@ -84,17 +84,21 @@ static inline void compute_all_weights(state_t *s) {
     graph_t *g = s->g;
     double *node_weight = s->node_weight;
 
+    // TODO: may parallel this?
     for (nid = 0; nid < g->nnode; nid++)
 	node_weight[nid] = compute_weight(s, nid);
 }
 
 /* In synchronous or batch mode, can precompute sums for each region */
+// TODO: this may be the slowest, need to parallel 
 static inline void find_all_sums(state_t *s) {
     graph_t *g = s->g;
     init_sum_weight(s);
-    int nid, eid;
+    int nid;
+    #pragma omp parallel for schedule(dynamic)
     for (nid = 0; nid < g->nnode; nid++) {
 	double sum = 0.0;
+    int eid;
 	for (eid = g->neighbor_start[nid]; eid < g->neighbor_start[nid+1]; eid++) {
 	    sum += s->node_weight[g->neighbor[eid]];
 	    s->neighbor_accum_weight[eid] = sum;
